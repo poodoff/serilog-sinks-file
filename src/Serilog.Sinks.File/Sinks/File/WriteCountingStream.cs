@@ -44,7 +44,7 @@ namespace Serilog.Sinks.File
         }
 
         public override void Flush() => _stream.Flush();
-        public override bool CanRead => false;
+        public override bool CanRead => _stream.CanRead;
         public override bool CanSeek => _stream.CanSeek;
         public override bool CanWrite => true;
         public override long Length => _stream.Length;
@@ -58,17 +58,24 @@ namespace Serilog.Sinks.File
 
         public override long Seek(long offset, SeekOrigin origin)
         {
-            throw new InvalidOperationException($"Seek operations are not available through `{nameof(WriteCountingStream)}`.");
+            return _stream.Seek(offset, origin);
         }
 
         public override void SetLength(long value)
         {
-            throw new NotSupportedException();
+            _stream.SetLength(value);
+            CountedLength = value;
         }
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            throw new NotSupportedException();
+            return _stream.Read(buffer, offset, count);
         }
+
+        public void SetBeginPosition()
+        {
+            _stream.Seek(0, SeekOrigin.Begin);
+        }
+
     }
 }

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using Serilog.Events;
@@ -25,6 +26,7 @@ namespace Serilog.Sinks.File
     /// </summary>
     public sealed class FileSink : IFileSink, IDisposable
     {
+        readonly TextReader _outputReader;
         readonly TextWriter _output;
         readonly FileStream _underlyingStream;
         readonly ITextFormatter _textFormatter;
@@ -72,7 +74,10 @@ namespace Serilog.Sinks.File
                 Directory.CreateDirectory(directory);
             }
 
-            Stream outputStream = _underlyingStream = System.IO.File.Open(path, FileMode.Append, FileAccess.Write, FileShare.Read);
+            var fileInfo = new FileInfo(path);
+            Stream outputStream = _underlyingStream = System.IO.File.Open(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
+            outputStream.Seek(fileInfo.Length, SeekOrigin.Begin);
+
             if (_fileSizeLimitBytes != null)
             {
                 outputStream = _countingStreamWrapper = new WriteCountingStream(_underlyingStream);
@@ -87,7 +92,8 @@ namespace Serilog.Sinks.File
                                throw new InvalidOperationException($"The file lifecycle hook `{nameof(FileLifecycleHooks.OnFileOpened)}(...)` returned `null`.");
             }
 
-            _output = new StreamWriter(outputStream, encoding);
+            _outputReader = new StreamReader(outputStream, encoding);
+            _output = new StreamWriter(outputStream, encoding); 
         }
 
         bool IFileSink.EmitOrOverflow(LogEvent logEvent)
@@ -98,7 +104,7 @@ namespace Serilog.Sinks.File
                 if (_fileSizeLimitBytes != null)
                 {
                     if (_countingStreamWrapper.CountedLength >= _fileSizeLimitBytes.Value)
-                        return false;
+                        RewriteFile();
                 }
 
                 _textFormatter.Format(logEvent, _output);
@@ -107,6 +113,47 @@ namespace Serilog.Sinks.File
 
                 return true;
             }
+        }
+
+        void RewriteFile(int safeFirstLines = 3)
+        {
+            //var lastLines = GetLastLines(5);
+
+            var firstLines = new StringBuilder();
+            _countingStreamWrapper.SetBeginPosition();
+            for (int i = 0; i < safeFirstLines; i++)
+            {
+                var line = _outputReader.ReadLine();
+                firstLines.AppendLine(line);
+            }
+                _countingStreamWrapper.SetLength(0);
+            _countingStreamWrapper.SetBeginPosition();
+
+            _output.WriteLine(firstLines);
+            _output.WriteLine("===== Rewrite ====");
+            //_output.WriteLine(lastLines);
+            _output.Flush();
+        }
+
+        private string GetLastLines(int lineCount)
+        {
+            var index = 1;
+            var currentPosition = 0L;
+            var countEndLine = 0;
+            while (true)
+            {
+                currentPosition = _countingStreamWrapper.Seek(-(index++), SeekOrigin.End);
+
+                var prevChar = _countingStreamWrapper.ReadByte();
+                if (prevChar == '\n')
+                    countEndLine++;
+
+                if (countEndLine == lineCount || currentPosition == 0)
+                    break;
+            }
+
+            var lastStrings = countEndLine > 0 ? _outputReader.ReadToEnd() : string.Empty;
+            return lastStrings;
         }
 
         /// <summary>
@@ -124,6 +171,7 @@ namespace Serilog.Sinks.File
             lock (_syncRoot)
             {
                 _output.Dispose();
+                _outputReader.Dispose();
             }
         }
 
